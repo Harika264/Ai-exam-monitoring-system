@@ -1,0 +1,157 @@
+// AI Exam Monitoring System — Prisma schema
+// Neon-compatible: pooled connection at runtime (DATABASE_URL),
+// direct connection for migrations (DIRECT_URL).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL") // pooled (PgBouncer) connection for app runtime
+  directUrl = env("DIRECT_URL")   // direct connection, used only by prisma migrate
+}
+
+enum Role {
+  STUDENT
+  ADMIN
+}
+
+enum ExamStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+}
+
+enum AttemptStatus {
+  IN_PROGRESS
+  SUBMITTED
+  EXPIRED
+}
+
+enum ReviewStatus {
+  NORMAL
+  REVIEWED
+  FLAGGED
+}
+
+enum EventType {
+  FACE_MISSING
+  MULTIPLE_FACES
+  PHONE_DETECTED
+  LOOKING_AWAY
+  PERSON_ABSENT
+}
+
+enum Severity {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+model User {
+  id           String   @id @default(cuid())
+  name         String
+  email        String   @unique
+  passwordHash String
+  role         Role     @default(STUDENT)
+  createdAt    DateTime @default(now())
+
+  exams    Exam[]    @relation("ExamCreatedBy")
+  attempts Attempt[]
+
+  @@map("users")
+}
+
+model Exam {
+  id              String     @id @default(cuid())
+  title           String
+  description     String?
+  durationMinutes Int
+  status          ExamStatus @default(DRAFT)
+  createdById     String
+  createdBy       User       @relation("ExamCreatedBy", fields: [createdById], references: [id])
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+
+  questions Question[]
+  attempts  Attempt[]
+
+  @@index([status])
+  @@index([createdById])
+  @@map("exams")
+}
+
+model Question {
+  id            String @id @default(cuid())
+  examId        String
+  exam          Exam   @relation(fields: [examId], references: [id], onDelete: Cascade)
+  questionText  String
+  optionA       String
+  optionB       String
+  optionC       String
+  optionD       String
+  correctOption String // "A" | "B" | "C" | "D" — validated server-side
+  marks         Int    @default(1)
+  order         Int    @default(0)
+
+  answers Answer[]
+
+  @@index([examId])
+  @@map("questions")
+}
+
+model Attempt {
+  id              String        @id @default(cuid())
+  examId          String
+  exam            Exam          @relation(fields: [examId], references: [id])
+  studentId       String
+  student         User          @relation(fields: [studentId], references: [id])
+  startedAt       DateTime      @default(now())
+  submittedAt     DateTime?
+  score           Int?
+  totalMarks      Int?
+  monitoringScore Int           @default(0)
+  status          AttemptStatus @default(IN_PROGRESS)
+  reviewStatus    ReviewStatus  @default(NORMAL)
+  reviewNote      String?
+
+  answers Answer[]
+  events  MonitoringEvent[]
+
+  @@unique([examId, studentId]) // MVP: one attempt per student per exam
+  @@index([studentId])
+  @@index([status])
+  @@map("attempts")
+}
+
+model Answer {
+  id             String   @id @default(cuid())
+  attemptId      String
+  attempt        Attempt  @relation(fields: [attemptId], references: [id], onDelete: Cascade)
+  questionId     String
+  question       Question @relation(fields: [questionId], references: [id])
+  selectedOption String? // "A".."D", or null if unanswered
+  isCorrect      Boolean  @default(false)
+
+  @@unique([attemptId, questionId])
+  @@map("answers")
+}
+
+model MonitoringEvent {
+  id              String    @id @default(cuid())
+  attemptId       String
+  attempt         Attempt   @relation(fields: [attemptId], references: [id], onDelete: Cascade)
+  eventType       EventType
+  severity        Severity
+  confidence      Float?
+  startedAt       DateTime
+  endedAt         DateTime?
+  durationSeconds Int?
+  metadata        Json?
+  createdAt       DateTime  @default(now())
+
+  @@index([attemptId])
+  @@index([eventType])
+  @@map("monitoring_events")
+}
